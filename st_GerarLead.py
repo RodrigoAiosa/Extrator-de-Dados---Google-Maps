@@ -11,7 +11,6 @@ from selenium.webdriver.support import expected_conditions as EC
 
 # --- CONFIGURAÇÕES DO SELENIUM PARA STREAMLIT CLOUD ---
 
-
 def configurar_driver():
     options = Options()
     options.add_argument('--headless')
@@ -42,7 +41,7 @@ def extrair_detalhes(driver, link):
             # Identificação básica de telefone
             if "(" in texto and "-" in texto and any(char.isdigit() for char in texto):
                 dados['Telefone'] = texto
-            # Identificação básica de endereço (geralmente contém vírgulas ou hifens de região)
+            # Identificação básica de endereço
             elif " - " in texto or "," in texto:
                 if dados['Endereço'] == 'N/A':
                     dados['Endereço'] = texto
@@ -61,13 +60,13 @@ def extrair_detalhes(driver, link):
 
 # --- INTERFACE STREAMLIT ---
 st.set_page_config(page_title="Google Maps Scraper",
-                   layout="wide", page_icon="📍")
+                    layout="wide", page_icon="📍")
 st.title("📍 Extrator de Dados - Google Maps")
 
 termo_final = st.text_input(
     "O que você deseja buscar?", placeholder="Ex: Fabricantes de móveis em SP")
 
-# Arquivo para manter o histórico global (Preservando dados conforme instrução)
+# Arquivo para manter o histórico global
 arquivo_excel = 'base_dados_total.xlsx'
 
 if st.button("🚀 Iniciar Extração"):
@@ -88,7 +87,7 @@ if st.button("🚀 Iniciar Extração"):
             wait.until(EC.presence_of_element_located(
                 (By.XPATH, '//div[@role="feed"]')))
 
-            # Rolagem para carregar a lista de resultados
+            # Rolagem para carregar a lista
             painel = driver.find_element(By.XPATH, '//div[@role="feed"]')
             last_count = 0
             while True:
@@ -103,7 +102,7 @@ if st.button("🚀 Iniciar Extração"):
                     break
                 last_count = current_count
                 if current_count > 60:
-                    break  # Limite para evitar timeout no Cloud
+                    break 
 
             # Coleta dos links e nomes
             elementos = driver.find_elements(By.CLASS_NAME, "hfpxzc")
@@ -114,13 +113,13 @@ if st.button("🚀 Iniciar Extração"):
                                       "Telefone": "Pendente",
                                       "Site": "Pendente"} for el in elementos])
 
-            # Limpeza de duplicados na busca atual
+            # Limpeza de duplicados
             df_atual = df_atual.drop_duplicates(
                 subset=['Link']).reset_index(drop=True)
             total_locais = len(df_atual)
             st.info(f"Processando {total_locais} empresas únicas...")
 
-            # Extração dos Detalhes (Endereço, Telefone, Site)
+            # Extração dos Detalhes
             for i in range(total_locais):
                 empresa = df_atual.at[i, 'Empresa']
                 status_info.text(
@@ -136,15 +135,13 @@ if st.button("🚀 Iniciar Extração"):
                 else:
                     log_erros.append(f"Erro em: {empresa}")
 
-            # --- PERSISTÊNCIA E PRESERVAÇÃO DE DADOS ---
+            # Persistência de dados
             if os.path.exists(arquivo_excel):
                 df_hist = pd.read_excel(arquivo_excel)
-                # Concatena o novo com o antigo e remove duplicatas pelo Link
                 df_final = pd.concat([df_hist, df_atual], ignore_index=True)
                 df_final = df_final.drop_duplicates(
                     subset=['Link'], keep='last')
                 df_final.to_excel(arquivo_excel, index=False)
-                # Mostra apenas o que foi buscado agora
                 st.session_state['df_resultado'] = df_atual
             else:
                 df_atual.to_excel(arquivo_excel, index=False)
@@ -163,7 +160,6 @@ if 'df_resultado' in st.session_state:
     st.subheader("📊 Resultados desta pesquisa")
     st.dataframe(st.session_state['df_resultado'], use_container_width=True)
 
-    # Botão para baixar a base COMPLETA (Histórico preservado)
     if os.path.exists(arquivo_excel):
         with open(arquivo_excel, "rb") as f:
             st.download_button(
@@ -172,3 +168,20 @@ if 'df_resultado' in st.session_state:
                 file_name="base_leads_acumulada.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
+
+# --- RODAPÉ (FOOTER) ---
+st.markdown("---")
+footer_html = """
+<div style='text-align: center; color: gray;'>
+    <p style='margin-bottom: 5px;'>Desenvolvido por <b>Rodrigo AIOSA</b></p>
+    <div style='display: flex; justify-content: center; gap: 20px; font-size: 24px;'>
+        <a href='https://wa.me/5511977019335' target='_blank' style='text-decoration: none;'>
+            <img src='https://cdn-icons-png.flaticon.com/512/733/733585.png' width='25' height='25' title='WhatsApp'>
+        </a>
+        <a href='https://www.linkedin.com/in/rodrigoaiosa/' target='_blank' style='text-decoration: none;'>
+            <img src='https://cdn-icons-png.flaticon.com/512/174/174857.png' width='25' height='25' title='LinkedIn'>
+        </a>
+    </div>
+</div>
+"""
+st.markdown(footer_html, unsafe_allow_html=True)
