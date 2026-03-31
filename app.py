@@ -1,8 +1,7 @@
 import streamlit as st
-from utils import exibir_rodape, registrar_acesso
 
 # --------------------------------------------------
-# CONFIGURAÇÃO DA PÁGINA (SEMPRE NO TOPO)
+# CONFIGURAÇÃO DA PÁGINA
 # --------------------------------------------------
 st.set_page_config(
     page_title="Projetos em Python | Rodrigo Aiosa",
@@ -11,21 +10,38 @@ st.set_page_config(
 )
 
 # --------------------------------------------------
+# FUNÇÕES INTERNAS (SUBSTITUI utils.py)
+# --------------------------------------------------
+def registrar_acesso(pagina):
+    """Registro simples (evita erro em produção)"""
+    # Pode evoluir depois (ex: banco, analytics)
+    print(f"Acesso: {pagina}")
+
+def exibir_rodape():
+    """Rodapé padrão"""
+    st.markdown("---")
+    st.markdown(
+        "<p style='text-align:center; color:#7b8ba8;'>© Rodrigo Aiosa</p>",
+        unsafe_allow_html=True
+    )
+
+# --------------------------------------------------
 # REGISTRO DE ACESSO
 # --------------------------------------------------
 registrar_acesso("Projetos Python")
 
 # --------------------------------------------------
-# FUNÇÕES UTILITÁRIAS
+# FUNÇÃO PARA RENDER HTML
 # --------------------------------------------------
 def render_html(html: str):
-    """Render seguro de HTML"""
     if html:
         st.markdown(html, unsafe_allow_html=True)
 
+# --------------------------------------------------
+# CACHE DE DADOS
+# --------------------------------------------------
 @st.cache_data
 def get_projects():
-    """Cache dos projetos (escalável)"""
     return [
         {
             "title": "🎓 Simulador ENEM",
@@ -44,8 +60,10 @@ def get_projects():
         }
     ]
 
+# --------------------------------------------------
+# COMPONENTE DE CARD
+# --------------------------------------------------
 def render_card(project):
-    """Componente reutilizável de card"""
     html = f"""
     <div class="project-card">
         <div class="project-card-inner">
@@ -64,91 +82,75 @@ def render_card(project):
     render_html(html)
 
 # --------------------------------------------------
-# ESTILO GLOBAL (UI MODERNA)
+# ESTILO
 # --------------------------------------------------
 render_html("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Sans:wght@300;400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400&display=swap');
 
-html, body, .main, [data-testid="stAppViewContainer"] {
+html, body, .main {
     background-color: #060912 !important;
 }
 
-/* CONTAINER */
 .block-container {
-    max-width: 1200px !important;
-    padding: 3rem !important;
+    max-width: 1100px;
 }
 
 /* HERO */
 .hero {
     text-align: center;
-    margin-bottom: 60px;
+    margin-bottom: 50px;
 }
 
 .hero-title {
     font-family: 'Syne', sans-serif;
-    font-size: 3rem;
-    font-weight: 800;
+    font-size: 2.8rem;
     color: #f0f4ff;
 }
 
 .hero-sub {
     color: #7b8ba8;
-    margin-top: 10px;
 }
 
 /* INPUT */
 div[data-testid="stTextInput"] input {
-    background: rgba(255,255,255,0.03) !important;
-    border-radius: 12px !important;
-    border: 1px solid rgba(0,180,216,0.3) !important;
-    color: #fff !important;
+    background: rgba(255,255,255,0.05);
+    border-radius: 12px;
+    color: white;
 }
 
 /* CARD */
 .project-card {
     background: rgba(255,255,255,0.03);
-    border-radius: 16px;
     padding: 20px;
-    margin-bottom: 16px;
-    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 16px;
+    margin-bottom: 15px;
     transition: 0.3s;
 }
 
 .project-card:hover {
     transform: translateY(-3px);
-    border-color: rgba(0,180,216,0.5);
 }
 
 .project-card-inner {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 20px;
 }
 
 .project-title {
-    font-weight: 700;
     color: #e2e8f0;
+    font-weight: bold;
 }
 
 .project-description {
-    font-size: 0.9rem;
     color: #7b8ba8;
+    font-size: 0.9rem;
 }
 
-/* BOTÃO */
 .project-btn {
-    padding: 10px 16px;
-    border-radius: 10px;
-    text-decoration: none;
     color: #00b4d8;
-    border: 1px solid rgba(0,180,216,0.3);
-}
-
-.project-btn:hover {
-    background: rgba(0,180,216,0.1);
+    text-decoration: none;
 }
 </style>
 """)
@@ -159,19 +161,14 @@ div[data-testid="stTextInput"] input {
 render_html("""
 <div class="hero">
     <div class="hero-title">Aplicações que resolvem problemas reais</div>
-    <div class="hero-sub">
-        Automação • Dados • Inteligência aplicada
-    </div>
+    <div class="hero-sub">Automação • Dados • Inteligência</div>
 </div>
 """)
 
 # --------------------------------------------------
 # BUSCA
 # --------------------------------------------------
-search_query = st.text_input(
-    "",
-    placeholder="🔍 Buscar projetos..."
-)
+search_query = st.text_input("", placeholder="🔍 Buscar projetos...")
 
 # --------------------------------------------------
 # DADOS
