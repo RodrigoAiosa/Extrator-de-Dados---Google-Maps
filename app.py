@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import time
 import os
+import shutil
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -348,21 +349,65 @@ footer { display: none !important; }
 # SELENIUM
 # ─────────────────────────────────────────────
 
-def configurar_driver():
+def _chrome_options():
     options = Options()
-    options.add_argument("--headless")
+    options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_argument("--window-size=1920,1080")
+    options.add_argument("--remote-debugging-port=9222")
     options.add_argument(
         "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
-    options.binary_location = "/usr/bin/chromium"
-    service = Service("/usr/bin/chromedriver")
-    return webdriver.Chrome(service=service, options=options)
+    return options
+
+
+def configurar_driver():
+    options = _chrome_options()
+
+    # 1️⃣ Tenta webdriver-manager (instala automaticamente a versão correta)
+    try:
+        from webdriver_manager.chrome import ChromeDriverManager
+        from webdriver_manager.core.os_manager import ChromeType
+        # Tenta Chromium primeiro (mais comum no Linux cloud)
+        try:
+            service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
+            options.binary_location = shutil.which("chromium") or shutil.which("chromium-browser") or ""
+            return webdriver.Chrome(service=service, options=options)
+        except Exception:
+            pass
+        # Tenta Chrome padrão
+        service = Service(ChromeDriverManager().install())
+        return webdriver.Chrome(service=service, options=options)
+    except Exception:
+        pass
+
+    # 2️⃣ Fallback: caminhos conhecidos do Streamlit Cloud / Ubuntu
+    BROWSER_PATHS = [
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+    ]
+    DRIVER_PATHS = [
+        "/usr/bin/chromedriver",
+        "/usr/local/bin/chromedriver",
+        shutil.which("chromedriver") or "",
+    ]
+
+    browser = next((p for p in BROWSER_PATHS if os.path.exists(p)), None)
+    driver_bin = next((p for p in DRIVER_PATHS if p and os.path.exists(p)), None)
+
+    if browser:
+        options.binary_location = browser
+    if driver_bin:
+        return webdriver.Chrome(service=Service(driver_bin), options=options)
+
+    # 3️⃣ Último recurso: deixa o Selenium detectar sozinho
+    return webdriver.Chrome(options=options)
 
 
 def rolar_ate_o_fim(driver, status_widget, max_sem_novos=5):
