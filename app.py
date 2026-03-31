@@ -569,7 +569,7 @@ if not st.session_state["logado"]:
     """, unsafe_allow_html=True)
 
     # LOGIN CARD
-    st.markdown('<div class="login-wrap"><div class="login-card">', unsafe_allow_html=True)
+    # st.markdown('<div class="login-wrap"><div class="login-card">', unsafe_allow_html=True)
     st.markdown("""
         <div class="login-icon">🔐</div>
         <div class="login-title">Acesso Restrito</div>
