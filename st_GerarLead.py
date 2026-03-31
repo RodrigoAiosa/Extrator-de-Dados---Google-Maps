@@ -1,114 +1,141 @@
 import streamlit as st
 import pandas as pd
-import time
-import os
+import asyncio
 import random
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
+from playwright.async_api import async_playwright
 
 # ─────────────────────────────────────────────
-# CONFIG
+# CONFIG UI
+# ─────────────────────────────────────────────
+
+st.set_page_config(
+    page_title="Maps Extractor PRO",
+    page_icon="🚀",
+    layout="wide"
+)
+
+st.markdown("""
+<style>
+body {
+    background: linear-gradient(135deg, #0f172a, #1e293b);
+}
+h1, h2 {
+    color: white;
+    text-align: center;
+}
+.card {
+    background:#1e293b;
+    padding:25px;
+    border-radius:15px;
+}
+.stButton>button {
+    background: linear-gradient(90deg, #6366f1, #8b5cf6);
+    color: white;
+    border-radius: 10px;
+    height: 50px;
+    font-weight: bold;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# LOGIN
+# ─────────────────────────────────────────────
+
+def tela_login():
+    st.markdown("<h1>🔐 Acesso Restrito</h1>", unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns([1,2,1])
+
+    with col2:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+
+        user = st.text_input("Usuário")
+        pwd = st.text_input("Senha", type="password")
+
+        if st.button("Entrar", use_container_width=True):
+            if user == "aiosa" and pwd == "@iosa31R":
+                st.session_state["auth"] = True
+                st.rerun()
+            else:
+                st.error("Credenciais inválidas")
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+if "auth" not in st.session_state:
+    st.session_state["auth"] = False
+
+if not st.session_state["auth"]:
+    tela_login()
+    st.stop()
+
+# ─────────────────────────────────────────────
+# CONFIG PLAYWRIGHT
 # ─────────────────────────────────────────────
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/119.0.0.0",
-    "Mozilla/5.0 (X11; Linux x86_64) Chrome/118.0.0.0"
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
 ]
 
-MAX_THREADS = 3  # ⚠️ cuidado: mais que isso aumenta bloqueio
-
 # ─────────────────────────────────────────────
-# DRIVER COM ANTI-BLOQUEIO
+# BROWSER
 # ─────────────────────────────────────────────
 
-def configurar_driver():
-    options = Options()
+async def iniciar():
+    p = await async_playwright().start()
 
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_argument("--disable-infobars")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--window-size=1920,1080")
+    browser = await p.chromium.launch(headless=True)
 
-    # Rotação de user-agent
-    options.add_argument(f"user-agent={random.choice(USER_AGENTS)}")
-
-    service = Service("/usr/bin/chromedriver")
-
-    driver = webdriver.Chrome(service=service, options=options)
-
-    # Anti-detection JS
-    driver.execute_script("""
-        Object.defineProperty(navigator, 'webdriver', {get: () => undefined})
-    """)
-
-    return driver
-
-# ─────────────────────────────────────────────
-# SCROLL COMPLETO
-# ─────────────────────────────────────────────
-
-def rolar_ate_o_fim(driver):
-    WebDriverWait(driver, 15).until(
-        EC.presence_of_element_located((By.XPATH, '//div[@role="feed"]'))
+    context = await browser.new_context(
+        user_agent=random.choice(USER_AGENTS),
+        viewport={"width": 1920, "height": 1080}
     )
 
-    painel = driver.find_element(By.XPATH, '//div[@role="feed"]')
+    page = await context.new_page()
 
-    ultimo = 0
+    return p, browser, context, page
+
+# ─────────────────────────────────────────────
+# SCROLL TOTAL
+# ─────────────────────────────────────────────
+
+async def scroll(page):
+    await page.wait_for_selector('div[role="feed"]')
+
+    last = 0
 
     while True:
-        driver.execute_script(
-            "arguments[0].scrollTop = arguments[0].scrollHeight", painel
-        )
+        await page.mouse.wheel(0, 5000)
+        await asyncio.sleep(random.uniform(1.5, 2.5))
 
-        time.sleep(random.uniform(2, 3))  # delay humano
+        elements = await page.query_selector_all("a.hfpxzc")
+        count = len(elements)
 
-        elementos = driver.find_elements(By.CLASS_NAME, "hfpxzc")
-        atual = len(elementos)
-
-        if atual == ultimo:
+        if count == last:
             break
 
-        ultimo = atual
+        last = count
 
-    return elementos
+    return elements
 
 # ─────────────────────────────────────────────
-# EXTRAÇÃO SEGURA (THREAD)
+# DETALHES
 # ─────────────────────────────────────────────
 
-def extrair_detalhes_thread(link):
-    driver = configurar_driver()
+async def extrair(context, link):
+    page = await context.new_page()
 
     try:
-        driver.get(link)
+        await page.goto(link, timeout=30000)
+        await page.wait_for_selector(".Io6YTe", timeout=10000)
 
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CLASS_NAME, "Io6YTe"))
-        )
+        dados = {"Endereço": "N/A", "Telefone": "N/A", "Site": "N/A"}
 
-        time.sleep(random.uniform(1, 2))
+        elements = await page.query_selector_all(".Io6YTe")
 
-        dados = {
-            "Endereço": "N/A",
-            "Telefone": "N/A",
-            "Site": "N/A",
-        }
-
-        elementos = driver.find_elements(By.CLASS_NAME, "Io6YTe")
-
-        for el in elementos:
-            txt = el.text.strip()
+        for el in elements:
+            txt = await el.inner_text()
 
             if "(" in txt and any(c.isdigit() for c in txt):
                 dados["Telefone"] = txt
@@ -117,8 +144,9 @@ def extrair_detalhes_thread(link):
                 dados["Endereço"] = txt
 
         try:
-            site = driver.find_element(By.CSS_SELECTOR, 'a[data-item-id="authority"]')
-            dados["Site"] = site.get_attribute("href")
+            site = await page.query_selector('a[data-item-id="authority"]')
+            if site:
+                dados["Site"] = await site.get_attribute("href")
         except:
             pass
 
@@ -128,85 +156,83 @@ def extrair_detalhes_thread(link):
         return None
 
     finally:
-        driver.quit()
+        await page.close()
 
 # ─────────────────────────────────────────────
-# STREAMLIT UI
+# EXECUÇÃO
 # ─────────────────────────────────────────────
 
-st.set_page_config(page_title="Maps Extractor PRO", layout="wide")
-st.title("🚀 Maps Extractor PRO")
+async def run(termo):
 
-termo = st.text_input("Busca", placeholder="Ex: Restaurantes em São Paulo")
-
-if st.button("🚀 Extrair"):
-
-    driver = configurar_driver()
+    p, browser, context, page = await iniciar()
 
     url = f"https://www.google.com/maps/search/{termo.replace(' ', '+')}"
-    driver.get(url)
+    await page.goto(url)
 
-    st.info("🔄 Coletando lista de empresas...")
+    elements = await scroll(page)
 
-    elementos = rolar_ate_o_fim(driver)
-
-    # 🔥 ANTI-STALE
     lista = []
-    for el in elementos:
+
+    for el in elements:
         try:
-            nome = el.get_attribute("aria-label")
-            link = el.get_attribute("href")
+            nome = await el.get_attribute("aria-label")
+            link = await el.get_attribute("href")
 
             if nome and link:
                 lista.append({"Empresa": nome, "Link": link})
         except:
             continue
 
-    driver.quit()
+    tarefas = [extrair(context, item["Link"]) for item in lista]
 
-    total = len(lista)
-    st.success(f"📊 {total} empresas encontradas")
-
-    progresso = st.progress(0)
+    respostas = await asyncio.gather(*tarefas)
 
     resultados = []
 
-    # ─────────────────────────────────────────
-    # MULTITHREAD CONTROLADO
-    # ─────────────────────────────────────────
+    for item, detalhe in zip(lista, respostas):
+        if detalhe:
+            resultados.append({
+                "Empresa": item["Empresa"],
+                "Link": item["Link"],
+                **detalhe
+            })
 
-    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+    await browser.close()
+    await p.stop()
 
-        futures = {
-            executor.submit(extrair_detalhes_thread, item["Link"]): item
-            for item in lista
-        }
+    return pd.DataFrame(resultados)
 
-        for i, future in enumerate(as_completed(futures)):
-            item = futures[future]
+# ─────────────────────────────────────────────
+# UI PRINCIPAL
+# ─────────────────────────────────────────────
 
-            try:
-                detalhes = future.result()
+st.title("🚀 Maps Extractor PRO")
 
-                if detalhes:
-                    resultados.append({
-                        "Empresa": item["Empresa"],
-                        "Link": item["Link"],
-                        **detalhes
-                    })
+termo = st.text_input("Buscar", placeholder="Ex: Clínicas em São Paulo")
 
-            except:
-                continue
+if st.button("🚀 Iniciar Extração"):
 
-            progresso.progress((i + 1) / total)
+    if not termo:
+        st.warning("Digite um termo")
+    else:
+        with st.spinner("Executando extração..."):
+            df = asyncio.run(run(termo))
 
-    df = pd.DataFrame(resultados)
+        st.success(f"✅ {len(df)} empresas extraídas")
 
-    arquivo = "leads.xlsx"
-    df.to_excel(arquivo, index=False)
+        st.dataframe(df, use_container_width=True)
 
-    st.success("✅ Extração finalizada")
-    st.dataframe(df)
+        df.to_excel("leads.xlsx", index=False)
 
-    with open(arquivo, "rb") as f:
-        st.download_button("📥 Baixar Excel", f, "leads.xlsx")
+        with open("leads.xlsx", "rb") as f:
+            st.download_button("📥 Baixar Excel", f, "leads.xlsx")
+
+# ─────────────────────────────────────────────
+# FOOTER
+# ─────────────────────────────────────────────
+
+st.markdown("---")
+st.markdown(
+    "<p style='text-align:center; color:gray;'>Desenvolvido por Rodrigo AIOSA</p>",
+    unsafe_allow_html=True
+)
