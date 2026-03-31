@@ -617,22 +617,15 @@ if not st.session_state["logado"]:
 arquivo_excel = "base_dados_total.xlsx"
 
 # Header do app
-col_logo, col_sair = st.columns([8, 1])
-with col_logo:
-    st.markdown("""
-    <div class="app-header">
-        <div class="app-logo">📍</div>
-        <div>
-            <div class="app-logo-text">Gerar Lead</div>
-            <div class="app-logo-sub">Google Maps Scraper</div>
-        </div>
+st.markdown("""
+<div class="app-header">
+    <div class="app-logo">📍</div>
+    <div>
+        <div class="app-logo-text">Gerar Lead</div>
+        <div class="app-logo-sub">Google Maps Scraper</div>
     </div>
-    """, unsafe_allow_html=True)
-with col_sair:
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    if st.button("Sair ↗"):
-        st.session_state["logado"] = False
-        st.rerun()
+</div>
+""", unsafe_allow_html=True)
 
 # Busca
 st.markdown("### 🔎 Nova Extração")
@@ -709,11 +702,90 @@ if "df_resultado" in st.session_state:
     st.markdown("### 📊 Resultados")
     df = st.session_state["df_resultado"]
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total extraído",   len(df))
-    c2.metric("Com telefone",     (df["Telefone"] != "N/A").sum())
-    c3.metric("Com site",         (df["Site"]     != "N/A").sum())
-    c4.metric("Com endereço",     (df["Endereço"] != "N/A").sum())
+    total      = len(df)
+    telefones  = int((df["Telefone"] != "N/A").sum())
+    sites      = int((df["Site"]     != "N/A").sum())
+    enderecos  = int((df["Endereço"] != "N/A").sum())
+    pct_tel    = round(telefones / total * 100) if total else 0
+    pct_site   = round(sites     / total * 100) if total else 0
+    pct_end    = round(enderecos / total * 100) if total else 0
+
+    st.markdown(f"""
+    <div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:28px;">
+
+        <div style="flex:1; min-width:160px; background:rgba(30,74,233,0.12);
+                    border:1px solid rgba(30,74,233,0.35); border-radius:16px;
+                    padding:24px 20px; text-align:center;">
+            <div style="font-size:2.4rem; font-family:'Syne',sans-serif;
+                        font-weight:800; background:linear-gradient(135deg,#fff,#7BA7FF);
+                        -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
+                {total}
+            </div>
+            <div style="font-size:.7rem; letter-spacing:.1em; text-transform:uppercase;
+                        color:#4A5568; margin-top:6px;">Total Extraído</div>
+            <div style="margin-top:10px; height:4px; border-radius:2px;
+                        background:rgba(255,255,255,0.06);">
+                <div style="width:100%; height:4px; border-radius:2px;
+                            background:linear-gradient(90deg,#1E4AE9,#00D4FF);"></div>
+            </div>
+        </div>
+
+        <div style="flex:1; min-width:160px; background:rgba(16,185,129,0.08);
+                    border:1px solid rgba(16,185,129,0.3); border-radius:16px;
+                    padding:24px 20px; text-align:center;">
+            <div style="font-size:2.4rem; font-family:'Syne',sans-serif;
+                        font-weight:800; background:linear-gradient(135deg,#fff,#6EE7B7);
+                        -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
+                {telefones}
+            </div>
+            <div style="font-size:.7rem; letter-spacing:.1em; text-transform:uppercase;
+                        color:#4A5568; margin-top:6px;">Com Telefone</div>
+            <div style="margin-top:10px; height:4px; border-radius:2px;
+                        background:rgba(255,255,255,0.06);">
+                <div style="width:{pct_tel}%; height:4px; border-radius:2px;
+                            background:linear-gradient(90deg,#10B981,#6EE7B7);"></div>
+            </div>
+            <div style="font-size:.7rem; color:#4A5568; margin-top:5px;">{pct_tel}%</div>
+        </div>
+
+        <div style="flex:1; min-width:160px; background:rgba(245,158,11,0.08);
+                    border:1px solid rgba(245,158,11,0.3); border-radius:16px;
+                    padding:24px 20px; text-align:center;">
+            <div style="font-size:2.4rem; font-family:'Syne',sans-serif;
+                        font-weight:800; background:linear-gradient(135deg,#fff,#FCD34D);
+                        -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
+                {sites}
+            </div>
+            <div style="font-size:.7rem; letter-spacing:.1em; text-transform:uppercase;
+                        color:#4A5568; margin-top:6px;">Com Site</div>
+            <div style="margin-top:10px; height:4px; border-radius:2px;
+                        background:rgba(255,255,255,0.06);">
+                <div style="width:{pct_site}%; height:4px; border-radius:2px;
+                            background:linear-gradient(90deg,#F59E0B,#FCD34D);"></div>
+            </div>
+            <div style="font-size:.7rem; color:#4A5568; margin-top:5px;">{pct_site}%</div>
+        </div>
+
+        <div style="flex:1; min-width:160px; background:rgba(139,92,246,0.08);
+                    border:1px solid rgba(139,92,246,0.3); border-radius:16px;
+                    padding:24px 20px; text-align:center;">
+            <div style="font-size:2.4rem; font-family:'Syne',sans-serif;
+                        font-weight:800; background:linear-gradient(135deg,#fff,#C4B5FD);
+                        -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
+                {enderecos}
+            </div>
+            <div style="font-size:.7rem; letter-spacing:.1em; text-transform:uppercase;
+                        color:#4A5568; margin-top:6px;">Com Endereço</div>
+            <div style="margin-top:10px; height:4px; border-radius:2px;
+                        background:rgba(255,255,255,0.06);">
+                <div style="width:{pct_end}%; height:4px; border-radius:2px;
+                            background:linear-gradient(90deg,#8B5CF6,#C4B5FD);"></div>
+            </div>
+            <div style="font-size:.7rem; color:#4A5568; margin-top:5px;">{pct_end}%</div>
+        </div>
+
+    </div>
+    """, unsafe_allow_html=True)
 
     st.dataframe(df, use_container_width=True)
 
