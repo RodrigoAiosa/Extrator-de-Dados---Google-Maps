@@ -617,7 +617,7 @@ if not st.session_state["logado"]:
 arquivo_excel = "base_dados_total.xlsx"
 
 # Header do app
-col_logo, col_sair = st.columns([8, 1])
+col_logo = st.columns([1])[0]
 with col_logo:
     st.markdown("""
     <div class="app-header">
@@ -628,11 +628,6 @@ with col_logo:
         </div>
     </div>
     """, unsafe_allow_html=True)
-with col_sair:
-    st.markdown("<br><br>", unsafe_allow_html=True)
-    if st.button("Sair ↗"):
-        st.session_state["logado"] = False
-        st.rerun()
 
 # Busca
 st.markdown("### 🔎 Nova Extração")
