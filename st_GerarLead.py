@@ -222,17 +222,10 @@ st.set_page_config(page_title="Google Maps Scraper", layout="wide", page_icon="�
 st.title("📍 Extrator de Dados — Google Maps")
 st.caption("Extrai **100% dos resultados** da busca: endereço, telefone, site, avaliação, categoria e mais.")
 
-col1, col2 = st.columns([3, 1])
-with col1:
-    termo_final = st.text_input(
-        "O que você deseja buscar?",
-        placeholder="Ex: Fabricantes de móveis em SP",
-    )
-with col2:
-    max_itens = st.number_input(
-        "Limite máximo de itens (0 = sem limite)",
-        min_value=0, max_value=5000, value=0, step=50
-    )
+termo_final = st.text_input(
+    "O que você deseja buscar?",
+    placeholder="Ex: Fabricantes de móveis em SP",
+)
 
 arquivo_excel = "base_dados_total.xlsx"
 
@@ -254,10 +247,6 @@ if st.button("🚀 Iniciar Extração", use_container_width=True):
 
             # ── Rolagem total ──────────────────────────────────────────────
             elementos = rolar_ate_o_fim(driver, status_info)
-
-            # ── Aplica limite opcional ─────────────────────────────────────
-            if max_itens and max_itens > 0:
-                elementos = elementos[:max_itens]
 
             # ── Monta DataFrame inicial ───────────────────────────────────
             df_atual = pd.DataFrame(
