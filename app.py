@@ -14,7 +14,7 @@ from selenium.webdriver.support import expected_conditions as EC
 # CREDENCIAIS
 # ─────────────────────────────────────────────
 USUARIO_CORRETO = "aiosa"
-SENHA_CORRETA   = "@iosa31R"
+SENHA_CORRETA   = "qazwsxedc@"
 
 # ─────────────────────────────────────────────
 # CSS — LANDING PAGE STYLE
