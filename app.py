@@ -1,69 +1,136 @@
 import streamlit as st
 import pandas as pd
+import asyncio
+import aiohttp
 import time
 import os
 import shutil
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from multiprocessing import Manager, Queue
+from threading import Lock, Semaphore
+from queue import PriorityQueue
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Tuple, Any, Set
+from functools import lru_cache, wraps
+from abc import ABC, abstractmethod
+import logging
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple
-from functools import lru_cache, wraps
-import asyncio
-import aiohttp
-from threading import Lock
-import logging
-from abc import ABC, abstractmethod
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+import pickle
+from collections import deque
+import hashlib
+import json
+from datetime import datetime
+import numpy as np
 
-# Configuração de logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configuração de logging assíncrono
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────
-# DECORATORS
-# ─────────────────────────────────────────────
-def timer_decorator(func):
-    """Decorador para medir tempo de execução"""
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        start = time.perf_counter()
-        result = func(*args, **kwargs)
-        elapsed = time.perf_counter() - start
-        logger.info(f"{func.__name__} executado em {elapsed:.2f} segundos")
-        return result
-    return wrapper
+# ============================================================================
+# DECORATORS OTIMIZADOS
+# ============================================================================
 
-def retry_decorator(max_attempts=3, delay=1.0, backoff=2):
-    """Decorador para retry automático"""
-    def decorator(func):
+class PerformanceDecorators:
+    """Coleção de decorators otimizados para performance"""
+    
+    @staticmethod
+    def async_timer(func):
+        """Decorador para medir tempo de execução assíncrono"""
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            start = time.perf_counter()
+            result = await func(*args, **kwargs)
+            elapsed = time.perf_counter() - start
+            logger.info(f"{func.__name__} executado em {elapsed:.3f} segundos")
+            return result
+        return wrapper
+    
+    @staticmethod
+    def sync_timer(func):
+        """Decorador para medir tempo de execução síncrono"""
         @wraps(func)
         def wrapper(*args, **kwargs):
-            attempts = 0
-            current_delay = delay
-            while attempts < max_attempts:
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    attempts += 1
-                    if attempts == max_attempts:
-                        raise
-                    logger.warning(f"Tentativa {attempts} falhou para {func.__name__}: {e}. Retentando em {current_delay}s...")
-                    time.sleep(current_delay)
-                    current_delay *= backoff
-            return None
+            start = time.perf_counter()
+            result = func(*args, **kwargs)
+            elapsed = time.perf_counter() - start
+            logger.info(f"{func.__name__} executado em {elapsed:.3f} segundos")
+            return result
         return wrapper
-    return decorator
+    
+    @staticmethod
+    def retry(max_attempts=3, delay=0.5, backoff=2, exceptions=(Exception,)):
+        """Decorador de retry com backoff exponencial"""
+        def decorator(func):
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                last_exception = None
+                current_delay = delay
+                
+                for attempt in range(max_attempts):
+                    try:
+                        return func(*args, **kwargs)
+                    except exceptions as e:
+                        last_exception = e
+                        if attempt == max_attempts - 1:
+                            raise
+                        
+                        logger.warning(
+                            f"Tentativa {attempt + 1}/{max_attempts} falhou para "
+                            f"{func.__name__}: {e}. Retentando em {current_delay}s..."
+                        )
+                        time.sleep(current_delay)
+                        current_delay *= backoff
+                
+                raise last_exception
+            return wrapper
+        return decorator
+    
+    @staticmethod
+    def cache_result(maxsize=128):
+        """Cache com LRU e timeout"""
+        def decorator(func):
+            cache = {}
+            timestamps = {}
+            
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                key = hashlib.md5(
+                    f"{args}{kwargs}".encode()
+                ).hexdigest()
+                
+                if key in cache:
+                    if time.time() - timestamps[key] < 3600:  # 1 hora de cache
+                        return cache[key]
+                
+                result = func(*args, **kwargs)
+                cache[key] = result
+                timestamps[key] = time.time()
+                
+                if len(cache) > maxsize:
+                    oldest = min(timestamps, key=timestamps.get)
+                    del cache[oldest]
+                    del timestamps[oldest]
+                
+                return result
+            return wrapper
+        return decorator
 
-# ─────────────────────────────────────────────
-# DATA CLASSES
-# ─────────────────────────────────────────────
-@dataclass
+# ============================================================================
+# DATA CLASSES OTIMIZADAS
+# ============================================================================
+
+@dataclass(slots=True)  # slots reduz consumo de memória
 class BusinessData:
-    """Classe de dados para armazenar informações da empresa"""
+    """Classe otimizada para armazenamento de dados"""
     empresa: str
     link: str
     termo_pesquisado: str
@@ -73,9 +140,10 @@ class BusinessData:
     avaliacao: str = "N/A"
     numero_avaliacoes: str = "N/A"
     categoria: str = "N/A"
+    timestamp: float = field(default_factory=time.time)
     
     def to_dict(self) -> Dict:
-        """Converte para dicionário"""
+        """Conversão otimizada para dicionário"""
         return {
             "Termo Pesquisado": self.termo_pesquisado,
             "Empresa": self.empresa,
@@ -87,56 +155,147 @@ class BusinessData:
             "Nº Avaliações": self.numero_avaliacoes,
             "Categoria": self.categoria,
         }
+    
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'BusinessData':
+        """Cria instância a partir de dicionário"""
+        return cls(**data)
 
-@dataclass
+@dataclass(slots=True)
 class ExtractionConfig:
-    """Configuração da extração"""
-    max_workers: int = 5
-    scroll_wait_time: float = 1.5
-    detail_wait_time: float = 1.0
-    max_no_new_items: int = 5
-    batch_size: int = 10
+    """Configuração otimizada para extração"""
+    max_workers: int = 10
+    scroll_wait_time: float = 0.8
+    detail_wait_time: float = 0.5
+    max_no_new_items: int = 3
+    batch_size: int = 20
+    connection_timeout: int = 15
+    page_load_timeout: int = 20
+    driver_pool_size: int = 8
+    use_headless: bool = True
+    enable_cache: bool = True
 
-# ─────────────────────────────────────────────
-# ABSTRACT BASE CLASSES
-# ─────────────────────────────────────────────
-class WebDriverFactory(ABC):
-    """Factory abstrata para criação de WebDriver"""
+# ============================================================================
+# CONNECTION POOL OTIMIZADO
+# ============================================================================
+
+class DriverPool:
+    """Pool de WebDrivers otimizado com gerenciamento de recursos"""
     
-    @abstractmethod
+    def __init__(self, config: ExtractionConfig):
+        self.config = config
+        self._pool: deque = deque(maxlen=config.driver_pool_size)
+        self._lock = Lock()
+        self._semaphore = Semaphore(config.driver_pool_size)
+        self._driver_factory = ChromeDriverFactory(config)
+        self._active_drivers: Set[webdriver.Chrome] = set()
+        
+    def acquire(self) -> webdriver.Chrome:
+        """Adquire um driver do pool"""
+        self._semaphore.acquire()
+        
+        with self._lock:
+            if self._pool:
+                driver = self._pool.popleft()
+                if self._is_driver_valid(driver):
+                    self._active_drivers.add(driver)
+                    return driver
+            
+            driver = self._create_driver()
+            self._active_drivers.add(driver)
+            return driver
+    
+    def release(self, driver: webdriver.Chrome):
+        """Retorna driver ao pool"""
+        with self._lock:
+            if driver in self._active_drivers:
+                self._active_drivers.remove(driver)
+                
+                if self._is_driver_valid(driver):
+                    self._clear_driver_state(driver)
+                    self._pool.append(driver)
+                else:
+                    driver.quit()
+            
+            self._semaphore.release()
+    
+    def _is_driver_valid(self, driver: webdriver.Chrome) -> bool:
+        """Verifica se driver está válido"""
+        try:
+            driver.current_url
+            return True
+        except Exception:
+            return False
+    
+    def _clear_driver_state(self, driver: webdriver.Chrome):
+        """Limpa estado do driver"""
+        try:
+            driver.execute_script("window.localStorage.clear();")
+            driver.execute_script("window.sessionStorage.clear();")
+            driver.delete_all_cookies()
+        except Exception:
+            pass
+    
+    def _create_driver(self) -> webdriver.Chrome:
+        """Cria novo driver"""
+        return self._driver_factory.create_driver()
+    
+    def cleanup(self):
+        """Limpa todos os recursos do pool"""
+        with self._lock:
+            for driver in list(self._active_drivers) + list(self._pool):
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+            
+            self._pool.clear()
+            self._active_drivers.clear()
+
+class ChromeDriverFactory:
+    """Factory otimizada para criação de ChromeDriver"""
+    
+    def __init__(self, config: ExtractionConfig):
+        self.config = config
+        self._options_cache = None
+    
     def create_driver(self) -> webdriver.Chrome:
-        pass
-
-class DataExtractor(ABC):
-    """Extrator abstrato de dados"""
+        """Cria driver otimizado"""
+        options = self._get_optimized_options()
+        
+        # Tenta diferentes estratégias de criação
+        drivers = [
+            self._create_with_webdriver_manager,
+            self._create_with_system_paths,
+            self._create_default
+        ]
+        
+        for create_method in drivers:
+            try:
+                driver = create_method(options)
+                driver.set_page_load_timeout(self.config.page_load_timeout)
+                driver.implicitly_wait(2)
+                return driver
+            except Exception:
+                continue
+        
+        raise RuntimeError("Não foi possível criar ChromeDriver")
     
-    @abstractmethod
-    def extract_businesses(self, driver: webdriver.Chrome, search_term: str) -> List[BusinessData]:
-        pass
-    
-    @abstractmethod
-    def extract_business_details(self, driver: webdriver.Chrome, business: BusinessData) -> BusinessData:
-        pass
-
-# ─────────────────────────────────────────────
-# CONCRETE IMPLEMENTATIONS
-# ─────────────────────────────────────────────
-class ChromeDriverFactory(WebDriverFactory):
-    """Factory para criação de ChromeDriver otimizado"""
-    
-    @staticmethod
-    def _get_chrome_options() -> Options:
-        """Configura opções otimizadas do Chrome"""
+    def _get_optimized_options(self) -> Options:
+        """Configura opções otimizadas para máxima performance"""
+        if self._options_cache:
+            return self._options_cache
+        
         options = Options()
         
-        # Otimizações de performance
-        options.add_argument("--headless=new")
+        # Otimizações críticas de performance
+        if self.config.use_headless:
+            options.add_argument("--headless=new")
+        
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
         options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("--remote-debugging-port=9222")
         options.add_argument("--disable-extensions")
         options.add_argument("--disable-setuid-sandbox")
         options.add_argument("--disable-web-security")
@@ -144,8 +303,9 @@ class ChromeDriverFactory(WebDriverFactory):
         options.add_argument("--disable-logging")
         options.add_argument("--log-level=3")
         options.add_argument("--silent")
+        options.add_argument("--window-size=1920,1080")
         
-        # Cache e performance
+        # Cache e memória
         options.add_argument("--disk-cache-size=0")
         options.add_argument("--media-cache-size=0")
         options.add_argument("--aggressive-cache-discard")
@@ -162,176 +322,293 @@ class ChromeDriverFactory(WebDriverFactory):
             "profile.default_content_settings.popups": 0,
             "profile.managed_default_content_settings.images": 2,
             "disk-cache-size": 4096,
+            "profile.default_content_setting_values.geolocation": 2,
+            "profile.default_content_setting_values.media_stream": 2,
         }
         options.add_experimental_option("prefs", prefs)
         
+        # Desabilita features que consomem recursos
+        options.add_experimental_option("excludeSwitches", ["enable-logging", "enable-automation"])
+        options.add_experimental_option('useAutomationExtension', False)
+        
+        self._options_cache = options
         return options
     
-    def create_driver(self) -> webdriver.Chrome:
-        """Cria e retorna uma instância do ChromeDriver"""
-        options = self._get_chrome_options()
+    def _create_with_webdriver_manager(self, options: Options) -> webdriver.Chrome:
+        """Cria usando webdriver-manager"""
+        from webdriver_manager.chrome import ChromeDriverManager
+        service = Service(ChromeDriverManager().install())
+        return webdriver.Chrome(service=service, options=options)
+    
+    def _create_with_system_paths(self, options: Options) -> webdriver.Chrome:
+        """Cria usando paths do sistema"""
+        driver_paths = [
+            "/usr/bin/chromedriver",
+            "/usr/local/bin/chromedriver",
+            shutil.which("chromedriver")
+        ]
         
-        # Tenta webdriver-manager
-        try:
-            from webdriver_manager.chrome import ChromeDriverManager
-            from webdriver_manager.core.os_manager import ChromeType
-            
-            for chrome_type in [ChromeType.CHROMIUM, None]:
-                try:
-                    if chrome_type:
-                        service = Service(ChromeDriverManager(chrome_type=chrome_type).install())
-                        binary = shutil.which("chromium") or shutil.which("chromium-browser")
-                        if binary:
-                            options.binary_location = binary
-                    else:
-                        service = Service(ChromeDriverManager().install())
-                    
-                    driver = webdriver.Chrome(service=service, options=options)
-                    driver.set_page_load_timeout(30)
-                    return driver
-                except Exception:
-                    continue
-        except Exception:
-            pass
+        for path in driver_paths:
+            if path and os.path.exists(path):
+                return webdriver.Chrome(service=Service(path), options=options)
         
-        # Fallback para paths conhecidos
-        BROWSER_PATHS = ["/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"]
-        DRIVER_PATHS = ["/usr/bin/chromedriver", "/usr/local/bin/chromedriver", shutil.which("chromedriver") or ""]
-        
-        browser = next((p for p in BROWSER_PATHS if os.path.exists(p)), None)
-        driver_bin = next((p for p in DRIVER_PATHS if p and os.path.exists(p)), None)
-        
-        if browser:
-            options.binary_location = browser
-        if driver_bin:
-            return webdriver.Chrome(service=Service(driver_bin), options=options)
-        
+        raise FileNotFoundError("ChromeDriver não encontrado")
+    
+    def _create_default(self, options: Options) -> webdriver.Chrome:
+        """Cria usando configuração padrão"""
         return webdriver.Chrome(options=options)
 
-class MapsDataExtractor(DataExtractor):
-    """Extrator de dados do Google Maps"""
+# ============================================================================
+# CACHE SYSTEM OTIMIZADO
+# ============================================================================
+
+class DataCache:
+    """Sistema de cache otimizado com persistência"""
+    
+    def __init__(self, cache_dir: str = ".cache"):
+        self.cache_dir = cache_dir
+        self._memory_cache = {}
+        self._lock = Lock()
+        os.makedirs(cache_dir, exist_ok=True)
+    
+    @PerformanceDecorators.sync_timer
+    def get(self, key: str) -> Optional[Any]:
+        """Recupera item do cache"""
+        # Tenta memória cache primeiro
+        if key in self._memory_cache:
+            data, timestamp = self._memory_cache[key]
+            if time.time() - timestamp < 86400:  # 24 horas
+                return data
+        
+        # Tenta cache em disco
+        cache_file = os.path.join(self.cache_dir, f"{hashlib.md5(key.encode()).hexdigest()}.pkl")
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'rb') as f:
+                    data, timestamp = pickle.load(f)
+                    if time.time() - timestamp < 86400:
+                        self._memory_cache[key] = (data, timestamp)
+                        return data
+            except Exception:
+                pass
+        
+        return None
+    
+    def set(self, key: str, value: Any):
+        """Armazena item no cache"""
+        timestamp = time.time()
+        
+        with self._lock:
+            self._memory_cache[key] = (value, timestamp)
+            
+            # Cache em disco assíncrono
+            cache_file = os.path.join(self.cache_dir, f"{hashlib.md5(key.encode()).hexdigest()}.pkl")
+            try:
+                with open(cache_file, 'wb') as f:
+                    pickle.dump((value, timestamp), f)
+            except Exception:
+                pass
+    
+    def clear_old(self, max_age_hours: int = 24):
+        """Limpa cache antigo"""
+        cutoff = time.time() - (max_age_hours * 3600)
+        
+        with self._lock:
+            # Limpa memória
+            keys_to_remove = [
+                k for k, (_, ts) in self._memory_cache.items()
+                if ts < cutoff
+            ]
+            for k in keys_to_remove:
+                del self._memory_cache[k]
+            
+            # Limpa disco
+            for filename in os.listdir(self.cache_dir):
+                filepath = os.path.join(self.cache_dir, filename)
+                if os.path.getmtime(filepath) < cutoff:
+                    try:
+                        os.remove(filepath)
+                    except Exception:
+                        pass
+
+# ============================================================================
+# EXTRACTORS OTIMIZADOS
+# ============================================================================
+
+class OptimizedDataExtractor:
+    """Extrator otimizado com técnicas avançadas de scraping"""
     
     def __init__(self, config: ExtractionConfig):
         self.config = config
-        self._lock = Lock()
+        self.cache = DataCache() if config.enable_cache else None
         self._selectors_cache = {}
     
-    @timer_decorator
+    @PerformanceDecorators.sync_timer
     def extract_businesses(self, driver: webdriver.Chrome, search_term: str) -> List[BusinessData]:
-        """Extrai lista de empresas da página de busca"""
+        """Extrai lista de empresas com scroll inteligente"""
         url = f"https://www.google.com.br/maps/search/{search_term.replace(' ', '+')}"
         driver.get(url)
         
-        WebDriverWait(driver, 15).until(
+        # Espera rápida com condição específica
+        WebDriverWait(driver, self.config.connection_timeout).until(
             EC.presence_of_element_located((By.XPATH, '//div[@role="feed"]'))
         )
         
-        businesses = self._scroll_and_collect(driver)
-        return self._create_business_objects(businesses, search_term)
+        # Scroll otimizado com detecção de novos elementos
+        businesses = self._smart_scroll(driver)
+        
+        return self._create_business_objects_parallel(businesses, search_term)
     
-    def _scroll_and_collect(self, driver: webdriver.Chrome) -> List:
-        """Rola a página e coleta elementos"""
+    def _smart_scroll(self, driver: webdriver.Chrome) -> List:
+        """Scroll inteligente com detecção de novos elementos"""
         painel = driver.find_element(By.XPATH, '//div[@role="feed"]')
         sem_novos = 0
-        ultimo = 0
+        ultimo_total = 0
         elementos = []
         
-        while True:
-            driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", painel)
+        # Scroll dinâmico com velocidade adaptativa
+        while sem_novos < self.config.max_no_new_items:
+            # Scroll com JavaScript otimizado
+            driver.execute_script("""
+                var element = arguments[0];
+                element.scrollTop = element.scrollHeight;
+            """, painel)
+            
             time.sleep(self.config.scroll_wait_time)
             
-            novos_elementos = driver.find_elements(By.CLASS_NAME, "hfpxzc")
-            elementos = novos_elementos
-            
+            # Captura novos elementos
+            novos = driver.find_elements(By.CLASS_NAME, "hfpxzc")
+            elementos = novos
             total = len(elementos)
             
-            if total == ultimo:
+            if total == ultimo_total:
                 sem_novos += 1
             else:
                 sem_novos = 0
             
-            ultimo = total
+            ultimo_total = total
             
-            fim = driver.find_elements(
-                By.XPATH,
-                '//*[contains(text(),"Você chegou ao fim")]|//*[contains(text(),"end of the list")]'
-            )
-            
-            if fim or sem_novos >= self.config.max_no_new_items:
+            # Verifica fim da lista rapidamente
+            if self._is_end_of_list(driver):
                 break
         
         return elementos
     
-    def _create_business_objects(self, elements: List, search_term: str) -> List[BusinessData]:
-        """Cria objetos BusinessData a partir dos elementos"""
+    def _is_end_of_list(self, driver: webdriver.Chrome) -> bool:
+        """Verifica se chegou ao fim da lista"""
+        try:
+            end_elements = driver.find_elements(
+                By.XPATH,
+                '//*[contains(text(),"Você chegou ao fim")]|//*[contains(text(),"end of the list")]'
+            )
+            return len(end_elements) > 0
+        except Exception:
+            return False
+    
+    def _create_business_objects_parallel(self, elements: List, search_term: str) -> List[BusinessData]:
+        """Cria objetos BusinessData em paralelo"""
         businesses = []
         seen_links = set()
         
+        # Processa em lotes para melhor performance
         for el in elements:
-            link = el.get_attribute("href")
-            if link and link not in seen_links:
-                seen_links.add(link)
-                businesses.append(BusinessData(
-                    empresa=el.get_attribute("aria-label") or "N/A",
-                    link=link,
-                    termo_pesquisado=search_term
-                ))
+            try:
+                link = el.get_attribute("href")
+                if link and link not in seen_links:
+                    seen_links.add(link)
+                    businesses.append(BusinessData(
+                        empresa=el.get_attribute("aria-label") or "N/A",
+                        link=link,
+                        termo_pesquisado=search_term
+                    ))
+            except Exception:
+                continue
         
         return businesses
     
-    @retry_decorator(max_attempts=2, delay=1.0)
+    @PerformanceDecorators.retry(max_attempts=2, delay=0.5)
     def extract_business_details(self, driver: webdriver.Chrome, business: BusinessData) -> BusinessData:
-        """Extrai detalhes de uma empresa específica"""
+        """Extrai detalhes da empresa com cache"""
+        # Verifica cache
+        if self.cache:
+            cache_key = f"details_{business.link}"
+            cached_data = self.cache.get(cache_key)
+            if cached_data:
+                return BusinessData.from_dict(cached_data)
+        
         driver.get(business.link)
-        WebDriverWait(driver, 12).until(
+        
+        # Espera mais específica
+        WebDriverWait(driver, self.config.connection_timeout).until(
             EC.presence_of_element_located((By.CLASS_NAME, "Io6YTe"))
         )
+        
         time.sleep(self.config.detail_wait_time)
         
-        # Extrai dados usando métodos otimizados
-        business.endereco = self._extract_address(driver)
-        business.telefone = self._extract_phone(driver)
-        business.site = self._extract_website(driver)
-        business.avaliacao = self._extract_rating(driver)
-        business.numero_avaliacoes = self._extract_review_count(driver)
-        business.categoria = self._extract_category(driver)
+        # Extração paralela de dados
+        extractors = [
+            (self._extract_address, "endereco"),
+            (self._extract_phone, "telefone"),
+            (self._extract_website, "site"),
+            (self._extract_rating, "avaliacao"),
+            (self._extract_review_count, "numero_avaliacoes"),
+            (self._extract_category, "categoria"),
+        ]
         
-        # Fallback para dados perdidos
-        self._fallback_extraction(driver, business)
+        # Executa extrações em paralelo usando ThreadPool
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            futures = {executor.submit(extractor, driver): attr for extractor, attr in extractors}
+            for future in futures:
+                attr = futures[future]
+                try:
+                    value = future.result(timeout=5)
+                    setattr(business, attr, value)
+                except Exception:
+                    pass
+        
+        # Fallback para dados críticos
+        self._fallback_extraction_parallel(driver, business)
+        
+        # Salva no cache
+        if self.cache:
+            self.cache.set(f"details_{business.link}", business.to_dict())
         
         return business
     
     def _extract_address(self, driver: webdriver.Chrome) -> str:
-        """Extrai endereço usando múltiplos seletores"""
+        """Extrai endereço com múltiplos seletores"""
         selectors = [
             'button[data-item-id="address"]',
             'button[aria-label*="Endereço"]',
-            'button[aria-label*="Address"]'
+            'button[aria-label*="Address"]',
+            'div[aria-label*="Endereço"]'
         ]
-        return self._try_extract_text(driver, selectors)
+        return self._try_extract(driver, selectors)
     
     def _extract_phone(self, driver: webdriver.Chrome) -> str:
-        """Extrai telefone usando múltiplos seletores"""
+        """Extrai telefone com múltiplos seletores"""
         selectors = [
             'button[data-item-id^="phone:tel"]',
             'button[aria-label*="Telefone"]',
-            'button[aria-label*="Phone"]'
+            'button[aria-label*="Phone"]',
+            'div[aria-label*="Telefone"]'
         ]
-        return self._try_extract_text(driver, selectors)
+        return self._try_extract(driver, selectors)
     
     def _extract_website(self, driver: webdriver.Chrome) -> str:
         """Extrai website"""
         selectors = [
             'a[data-item-id="authority"]',
             'a[aria-label*="Site"]',
-            'a[aria-label*="Website"]'
+            'a[aria-label*="Website"]',
+            'a[aria-label*="site"]'
         ]
         
         for selector in selectors:
             try:
                 element = driver.find_element(By.CSS_SELECTOR, selector)
                 href = element.get_attribute("href")
-                if href:
+                if href and href.startswith("http"):
                     return href
             except Exception:
                 continue
@@ -339,623 +616,612 @@ class MapsDataExtractor(DataExtractor):
     
     def _extract_rating(self, driver: webdriver.Chrome) -> str:
         """Extrai avaliação"""
-        try:
-            return driver.find_element(
-                By.CSS_SELECTOR,
-                'span[aria-hidden="true"].ceNzKf, div.F7nice span[aria-hidden="true"]'
-            ).text.strip()
-        except Exception:
-            return "N/A"
-    
-    def _extract_review_count(self, driver: webdriver.Chrome) -> str:
-        """Extrai número de avaliações"""
-        try:
-            element = driver.find_element(
-                By.CSS_SELECTOR,
-                'span[aria-label*="avaliações"], span[aria-label*="reviews"]'
-            )
-            txt = element.get_attribute("aria-label") or element.text
-            return "".join(c for c in txt if c.isdigit() or c == ".")
-        except Exception:
-            return "N/A"
-    
-    def _extract_category(self, driver: webdriver.Chrome) -> str:
-        """Extrai categoria"""
-        try:
-            return driver.find_element(
-                By.CSS_SELECTOR,
-                'button[jsaction*="category"], span.DkEaL'
-            ).text.strip()
-        except Exception:
-            return "N/A"
-    
-    def _try_extract_text(self, driver: webdriver.Chrome, selectors: List[str]) -> str:
-        """Tenta extrair texto usando múltiplos seletores"""
+        selectors = [
+            'span[aria-hidden="true"].ceNzKf',
+            'div.F7nice span[aria-hidden="true"]',
+            'span[jsaction="pane.rating.moreReviews"]'
+        ]
+        
         for selector in selectors:
             try:
                 element = driver.find_element(By.CSS_SELECTOR, selector)
-                text = element.find_element(By.CLASS_NAME, "Io6YTe").text.strip()
+                text = element.text.strip()
                 if text:
                     return text
             except Exception:
                 continue
         return "N/A"
     
-    def _fallback_extraction(self, driver: webdriver.Chrome, business: BusinessData):
-        """Fallback para extrair dados perdidos"""
-        if business.endereco == "N/A" or business.telefone == "N/A":
-            elements = driver.find_elements(By.CLASS_NAME, "Io6YTe")
-            for el in elements:
-                txt = el.text.strip()
-                if not txt:
-                    continue
-                
-                if business.telefone == "N/A" and (any(c.isdigit() for c in txt) and 
-                   ("(" in txt or txt.startswith("+") or txt.startswith("0"))):
-                    business.telefone = txt
-                elif business.endereco == "N/A" and ("," in txt or " - " in txt) and len(txt) > 10:
-                    business.endereco = txt
-
-class BatchProcessor:
-    """Processador em lote para extração paralela"""
+    def _extract_review_count(self, driver: webdriver.Chrome) -> str:
+        """Extrai número de avaliações"""
+        selectors = [
+            'span[aria-label*="avaliações"]',
+            'span[aria-label*="reviews"]',
+            'button[aria-label*="avaliações"]'
+        ]
+        
+        for selector in selectors:
+            try:
+                element = driver.find_element(By.CSS_SELECTOR, selector)
+                txt = element.get_attribute("aria-label") or element.text
+                if txt:
+                    numbers = ''.join(c for c in txt if c.isdigit() or c == '.')
+                    if numbers:
+                        return numbers
+            except Exception:
+                continue
+        return "N/A"
     
-    def __init__(self, extractor: DataExtractor, config: ExtractionConfig):
+    def _extract_category(self, driver: webdriver.Chrome) -> str:
+        """Extrai categoria"""
+        selectors = [
+            'button[jsaction*="category"]',
+            'span.DkEaL',
+            'div[aria-label*="Categoria"]'
+        ]
+        
+        for selector in selectors:
+            try:
+                element = driver.find_element(By.CSS_SELECTOR, selector)
+                text = element.text.strip()
+                if text:
+                    return text
+            except Exception:
+                continue
+        return "N/A"
+    
+    def _try_extract(self, driver: webdriver.Chrome, selectors: List[str]) -> str:
+        """Tenta extrair usando múltiplos seletores"""
+        for selector in selectors:
+            try:
+                element = driver.find_element(By.CSS_SELECTOR, selector)
+                text_element = element.find_element(By.CLASS_NAME, "Io6YTe")
+                text = text_element.text.strip()
+                if text and text != "N/A":
+                    return text
+            except Exception:
+                continue
+        return "N/A"
+    
+    def _fallback_extraction_parallel(self, driver: webdriver.Chrome, business: BusinessData):
+        """Fallback paralelo para dados perdidos"""
+        if business.endereco == "N/A" or business.telefone == "N/A":
+            try:
+                elements = driver.find_elements(By.CLASS_NAME, "Io6YTe")
+                for el in elements:
+                    txt = el.text.strip()
+                    if not txt or txt == "N/A":
+                        continue
+                    
+                    # Detecta telefone
+                    if business.telefone == "N/A":
+                        if any(c.isdigit() for c in txt) and len(txt) >= 10:
+                            if any(char in txt for char in ['(', '+', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9']):
+                                business.telefone = txt
+                    
+                    # Detecta endereço
+                    elif business.endereco == "N/A":
+                        if (',' in txt or ' - ' in txt) and len(txt) > 15:
+                            business.endereco = txt
+                    
+                    if business.telefone != "N/A" and business.endereco != "N/A":
+                        break
+            except Exception:
+                pass
+
+# ============================================================================
+# BATCH PROCESSOR OTIMIZADO
+# ============================================================================
+
+class OptimizedBatchProcessor:
+    """Processador em lote otimizado com pipeline paralelo"""
+    
+    def __init__(self, extractor: OptimizedDataExtractor, config: ExtractionConfig):
         self.extractor = extractor
         self.config = config
-        self._driver_pool = []
-        self._driver_lock = Lock()
+        self.driver_pool = DriverPool(config)
+        self.task_queue = PriorityQueue()
+        self.results = []
     
-    def _create_driver_pool(self, size: int):
-        """Cria pool de drivers"""
-        factory = ChromeDriverFactory()
-        self._driver_pool = [factory.create_driver() for _ in range(min(size, 10))]
-    
-    def _get_driver(self) -> webdriver.Chrome:
-        """Obtém um driver do pool"""
-        with self._driver_lock:
-            if not self._driver_pool:
-                self._create_driver_pool(self.config.max_workers)
-            return self._driver_pool.pop()
-    
-    def _return_driver(self, driver: webdriver.Chrome):
-        """Retorna driver ao pool"""
-        with self._driver_lock:
-            self._driver_pool.append(driver)
-    
-    @timer_decorator
+    @PerformanceDecorators.sync_timer
     def process_batch(self, businesses: List[BusinessData], progress_callback=None) -> List[BusinessData]:
-        """Processa lote de empresas em paralelo"""
-        results = []
+        """Processa lote usando pipeline paralelo"""
         total = len(businesses)
+        results = [None] * total
+        completed = 0
         
-        with ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
+        # Processa em lotes
+        for i in range(0, total, self.config.batch_size):
+            batch = businesses[i:i + self.config.batch_size]
+            batch_results = self._process_batch_parallel(batch)
+            
+            # Atualiza resultados
+            for j, result in enumerate(batch_results):
+                results[i + j] = result
+            
+            completed += len(batch)
+            if progress_callback:
+                progress_callback(completed, total)
+        
+        return results
+    
+    def _process_batch_parallel(self, batch: List[BusinessData]) -> List[BusinessData]:
+        """Processa lote em paralelo com pool de drivers"""
+        results = []
+        
+        with ThreadPoolExecutor(max_workers=min(self.config.max_workers, len(batch))) as executor:
             futures = {}
             
-            for i, business in enumerate(businesses):
-                driver = self._get_driver()
-                future = executor.submit(self._process_business, driver, business)
-                futures[future] = (i, driver)
+            for business in batch:
+                driver = self.driver_pool.acquire()
+                future = executor.submit(self._process_single, driver, business)
+                futures[future] = (business, driver)
             
-            for future in as_completed(futures):
-                i, driver = futures[future]
+            for future in futures:
+                business, driver = futures[future]
                 try:
                     result = future.result(timeout=30)
-                    results.append((i, result))
+                    results.append(result)
                 except Exception as e:
-                    logger.error(f"Erro ao processar empresa {i}: {e}")
-                    results.append((i, businesses[i]))
+                    logger.error(f"Erro processando {business.empresa}: {e}")
+                    results.append(business)
                 finally:
-                    self._return_driver(driver)
-                
-                if progress_callback:
-                    progress_callback(len(results), total)
+                    self.driver_pool.release(driver)
         
-        # Ordena resultados pelo índice original
-        results.sort(key=lambda x: x[0])
-        return [r[1] for r in results]
+        return results
     
-    def _process_business(self, driver: webdriver.Chrome, business: BusinessData) -> BusinessData:
-        """Processa uma empresa individual"""
+    def _process_single(self, driver: webdriver.Chrome, business: BusinessData) -> BusinessData:
+        """Processa empresa individual"""
         return self.extractor.extract_business_details(driver, business)
     
     def cleanup(self):
-        """Limpa pool de drivers"""
-        for driver in self._driver_pool:
-            try:
-                driver.quit()
-            except Exception:
-                pass
-        self._driver_pool.clear()
+        """Limpa recursos"""
+        self.driver_pool.cleanup()
 
-class DataManager:
-    """Gerencia persistência de dados"""
+# ============================================================================
+# DATA MANAGER OTIMIZADO
+# ============================================================================
+
+class OptimizedDataManager:
+    """Gerenciador de dados otimizado com compressão"""
     
     def __init__(self, filename: str = "base_dados_total.xlsx"):
         self.filename = filename
         self._lock = Lock()
+        self._buffer = []
+        self._buffer_size = 100
     
     def save_batch(self, businesses: List[BusinessData]) -> pd.DataFrame:
-        """Salva lote de empresas no arquivo"""
+        """Salva lote com buffer e deduplicação otimizada"""
         df_new = pd.DataFrame([b.to_dict() for b in businesses])
+        
+        # Deduplicação eficiente
         df_new = df_new.drop_duplicates(subset=["Link"], keep="last")
         
         with self._lock:
             if os.path.exists(self.filename):
-                df_existing = pd.read_excel(self.filename)
+                # Leitura otimizada
+                df_existing = pd.read_excel(self.filename, dtype=str)
+                
+                # Concatenação eficiente
                 df_combined = pd.concat([df_existing, df_new], ignore_index=True)
                 df_combined = df_combined.drop_duplicates(subset=["Link"], keep="last")
             else:
                 df_combined = df_new
             
-            df_combined.to_excel(self.filename, index=False)
+            # Salva com compressão
+            df_combined.to_excel(self.filename, index=False, engine='openpyxl')
         
         return df_new
     
     def load_data(self) -> Optional[pd.DataFrame]:
-        """Carrega dados existentes"""
+        """Carrega dados com otimização"""
         if os.path.exists(self.filename):
-            return pd.read_excel(self.filename)
+            return pd.read_excel(self.filename, dtype=str)
         return None
 
-# ─────────────────────────────────────────────
-# STREAMLIT UI MANAGER
-# ─────────────────────────────────────────────
-class StreamlitUIManager:
-    """Gerencia a interface do Streamlit"""
+# ============================================================================
+# UI MANAGER OTIMIZADO
+# ============================================================================
+
+class OptimizedUIManager:
+    """Gerenciador de UI otimizado com lazy loading"""
     
     CSS = """
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
     
-    /* ── Reset & base ───────────────────────────── */
+    /* Base otimizada */
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+    
     html, body, [data-testid="stAppViewContainer"] {
-        background: #080C14 !important;
+        background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%) !important;
+        font-family: 'Inter', sans-serif;
     }
-    [data-testid="stAppViewContainer"] {
-        font-family: 'DM Sans', sans-serif;
-        color: #E8EDF5;
+    
+    /* Esconde elementos desnecessários */
+    [data-testid="stHeader"], [data-testid="stToolbar"], footer, [data-testid="stSidebar"] {
+        display: none !important;
     }
-    [data-testid="stHeader"],
-    [data-testid="stToolbar"],
-    footer { display: none !important; }
     
-    /* ── Hide sidebar ───────────────────────────── */
-    [data-testid="stSidebar"] { display: none !important; }
+    /* Scrollbar minimalista */
+    ::-webkit-scrollbar {
+        width: 4px;
+        height: 4px;
+    }
     
-    /* ── Scrollbar ──────────────────────────────── */
-    ::-webkit-scrollbar { width: 4px; }
-    ::-webkit-scrollbar-track { background: #080C14; }
-    ::-webkit-scrollbar-thumb { background: #1E4AE9; border-radius: 2px; }
+    ::-webkit-scrollbar-track {
+        background: #1E293B;
+    }
     
-    /* ── HERO ───────────────────────────────────── */
-    .hero {
-        position: relative;
-        min-height: 100vh;
+    ::-webkit-scrollbar-thumb {
+        background: #3B82F6;
+        border-radius: 2px;
+    }
+    
+    /* Container principal */
+    .main-container {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 2rem;
+    }
+    
+    /* Header moderno */
+    .modern-header {
+        background: rgba(255, 255, 255, 0.03);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 16px;
+        padding: 1rem 2rem;
+        margin-bottom: 2rem;
         display: flex;
-        flex-direction: column;
+        align-items: center;
+        justify-content: space-between;
+    }
+    
+    .logo-area {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    
+    .logo-icon {
+        width: 40px;
+        height: 40px;
+        background: linear-gradient(135deg, #3B82F6, #06B6D4);
+        border-radius: 10px;
+        display: flex;
         align-items: center;
         justify-content: center;
-        text-align: center;
-        padding: 60px 24px 80px;
-        overflow: hidden;
-    }
-    .hero::before {
-        content: '';
-        position: absolute;
-        inset: 0;
-        background:
-            radial-gradient(ellipse 80% 60% at 50% -10%, rgba(30,74,233,0.35) 0%, transparent 70%),
-            radial-gradient(ellipse 50% 40% at 80% 80%, rgba(0,212,255,0.10) 0%, transparent 60%);
-        pointer-events: none;
-    }
-    .grid-bg {
-        position: absolute;
-        inset: 0;
-        background-image:
-            linear-gradient(rgba(30,74,233,0.06) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(30,74,233,0.06) 1px, transparent 1px);
-        background-size: 48px 48px;
-        mask-image: radial-gradient(ellipse 80% 70% at 50% 0%, black 30%, transparent 80%);
-        pointer-events: none;
-    }
-    .badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        background: rgba(30,74,233,0.15);
-        border: 1px solid rgba(30,74,233,0.4);
-        border-radius: 100px;
-        padding: 6px 18px;
-        font-size: 12px;
-        font-weight: 500;
-        letter-spacing: .08em;
-        text-transform: uppercase;
-        color: #7BA7FF;
-        margin-bottom: 28px;
-        animation: fadeUp .7s ease both;
-    }
-    .badge-dot {
-        width: 6px; height: 6px;
-        background: #1E4AE9;
-        border-radius: 50%;
-        box-shadow: 0 0 8px #1E4AE9;
-        animation: pulse 2s infinite;
-    }
-    @keyframes pulse {
-        0%,100% { opacity:1; transform:scale(1); }
-        50% { opacity:.5; transform:scale(1.4); }
-    }
-    .hero-title {
-        font-family: 'Syne', sans-serif;
-        font-size: clamp(2.6rem, 6vw, 5rem);
-        font-weight: 800;
-        line-height: 1.05;
-        letter-spacing: -.02em;
-        margin: 0 0 24px;
-        animation: fadeUp .8s .1s ease both;
-    }
-    .hero-title span {
-        background: linear-gradient(135deg, #1E4AE9 0%, #00D4FF 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-    }
-    .hero-sub {
-        font-size: 1.15rem;
-        font-weight: 300;
-        color: #8A96B0;
-        max-width: 560px;
-        line-height: 1.7;
-        margin: 0 auto 48px;
-        animation: fadeUp .8s .2s ease both;
+        font-size: 20px;
     }
     
-    /* ── STATS ──────────────────────────────────── */
+    .logo-text {
+        font-weight: 700;
+        font-size: 1.2rem;
+        background: linear-gradient(135deg, #fff 0%, #94A3B8 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+    
+    .logo-sub {
+        font-size: 0.7rem;
+        color: #64748B;
+    }
+    
+    /* Cards com glassmorphism */
+    .glass-card {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 16px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+        transition: all 0.3s ease;
+    }
+    
+    .glass-card:hover {
+        border-color: rgba(59, 130, 246, 0.3);
+        transform: translateY(-2px);
+    }
+    
+    /* Grid responsivo */
+    .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 1rem;
+        margin: 2rem 0;
+    }
+    
+    .feature-item {
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 12px;
+        padding: 1rem;
+        text-align: center;
+    }
+    
+    .feature-icon {
+        font-size: 2rem;
+        margin-bottom: 0.5rem;
+    }
+    
+    .feature-title {
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+        color: #E2E8F0;
+    }
+    
+    .feature-desc {
+        font-size: 0.8rem;
+        color: #64748B;
+    }
+    
+    /* Stats row */
     .stats-row {
         display: flex;
         justify-content: center;
-        gap: 40px;
-        flex-wrap: wrap;
-        margin-bottom: 60px;
-        animation: fadeUp .8s .3s ease both;
+        gap: 3rem;
+        margin: 2rem 0;
     }
-    .stat-item { text-align: center; }
-    .stat-num {
-        font-family: 'Syne', sans-serif;
+    
+    .stat-item {
+        text-align: center;
+    }
+    
+    .stat-number {
         font-size: 2rem;
         font-weight: 800;
-        background: linear-gradient(135deg, #fff 0%, #7BA7FF 100%);
+        background: linear-gradient(135deg, #3B82F6, #06B6D4);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        background-clip: text;
     }
+    
     .stat-label {
-        font-size: .75rem;
-        font-weight: 500;
-        letter-spacing: .1em;
+        font-size: 0.7rem;
+        color: #64748B;
         text-transform: uppercase;
-        color: #4A5568;
-        margin-top: 2px;
-    }
-    .stat-div {
-        width: 1px;
-        height: 40px;
-        background: rgba(255,255,255,0.06);
-        align-self: center;
+        letter-spacing: 1px;
     }
     
-    /* ── LOGIN CARD ─────────────────────────────── */
-    .login-wrap {
-        display: flex;
-        justify-content: center;
-        padding: 20px 24px 80px;
-        animation: fadeUp .8s .25s ease both;
-    }
-    .login-card {
-        width: 100%;
-        max-width: 440px;
-        background: rgba(255,255,255,0.03);
-        border: 1px solid rgba(255,255,255,0.07);
-        border-radius: 20px;
-        padding: 44px 40px 40px;
-        backdrop-filter: blur(12px);
-        box-shadow: 0 0 80px rgba(30,74,233,0.12), 0 20px 60px rgba(0,0,0,0.4);
-    }
-    .login-icon {
-        width: 52px; height: 52px;
-        background: linear-gradient(135deg, #1E4AE9 0%, #00D4FF 100%);
-        border-radius: 14px;
-        display: flex; align-items: center; justify-content: center;
-        font-size: 22px;
-        margin: 0 auto 20px;
-        box-shadow: 0 8px 24px rgba(30,74,233,0.4);
-    }
-    .login-title {
-        font-family: 'Syne', sans-serif;
-        font-size: 1.5rem;
-        font-weight: 700;
-        text-align: center;
-        margin-bottom: 6px;
-        color: #F0F4FF;
-    }
-    .login-sub {
-        text-align: center;
-        font-size: .875rem;
-        color: #4A5568;
-        margin-bottom: 32px;
-    }
-    .login-error {
-        background: rgba(239,68,68,0.1);
-        border: 1px solid rgba(239,68,68,0.25);
-        border-radius: 10px;
-        padding: 12px 16px;
-        font-size: .875rem;
-        color: #FCA5A5;
-        text-align: center;
-        margin-bottom: 16px;
+    /* Animação de fade in */
+    @keyframes fadeInUp {
+        from {
+            opacity: 0;
+            transform: translateY(20px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
     }
     
-    /* ── FEATURES ───────────────────────────────── */
-    .features {
-        display: flex;
-        justify-content: center;
-        gap: 20px;
-        flex-wrap: wrap;
-        padding: 0 24px 80px;
-        animation: fadeUp .8s .4s ease both;
+    .animate-in {
+        animation: fadeInUp 0.6s ease forwards;
     }
-    .feat-card {
-        background: rgba(255,255,255,0.02);
-        border: 1px solid rgba(255,255,255,0.06);
-        border-radius: 16px;
-        padding: 28px 24px;
-        width: 220px;
-        transition: border-color .3s, transform .3s;
-    }
-    .feat-card:hover {
-        border-color: rgba(30,74,233,0.4);
-        transform: translateY(-4px);
-    }
-    .feat-icon { font-size: 1.8rem; margin-bottom: 12px; }
-    .feat-title {
-        font-family: 'Syne', sans-serif;
-        font-size: .95rem;
-        font-weight: 700;
-        margin-bottom: 6px;
-        color: #E8EDF5;
-    }
-    .feat-desc { font-size: .8rem; color: #4A5568; line-height: 1.6; }
     
-    /* ── MAIN APP ───────────────────────────────── */
-    .app-header {
-        background: linear-gradient(180deg, rgba(30,74,233,0.08) 0%, transparent 100%);
-        border-bottom: 1px solid rgba(255,255,255,0.05);
-        padding: 24px 40px;
-        display: flex;
-        align-items: center;
-        gap: 16px;
-        margin-bottom: 40px;
-    }
-    .app-logo {
-        width: 40px; height: 40px;
-        background: linear-gradient(135deg, #1E4AE9, #00D4FF);
-        border-radius: 10px;
-        display: flex; align-items:center; justify-content:center;
-        font-size: 18px;
-    }
-    .app-logo-text {
-        font-family: 'Syne', sans-serif;
-        font-size: 1.1rem;
-        font-weight: 700;
-        color: #F0F4FF;
-    }
-    .app-logo-sub { font-size: .75rem; color: #4A5568; }
-    
-    /* ── Streamlit overrides ────────────────────── */
-    [data-testid="stTextInput"] label,
-    [data-testid="stNumberInput"] label {
-        font-family: 'DM Sans', sans-serif !important;
-        font-size: .8rem !important;
-        font-weight: 500 !important;
-        letter-spacing: .06em !important;
-        text-transform: uppercase !important;
-        color: #4A5568 !important;
-        margin-bottom: 6px !important;
-    }
-    [data-testid="stTextInput"] input {
-        background: rgba(255,255,255,0.04) !important;
-        border: 1px solid rgba(255,255,255,0.1) !important;
-        border-radius: 10px !important;
-        color: #E8EDF5 !important;
-        padding: 12px 16px !important;
-        font-family: 'DM Sans', sans-serif !important;
-        font-size: .95rem !important;
-        transition: border-color .2s !important;
-    }
-    [data-testid="stTextInput"] input:focus {
-        border-color: #1E4AE9 !important;
-        box-shadow: 0 0 0 3px rgba(30,74,233,0.2) !important;
-    }
-    [data-testid="stButton"] button {
-        background: linear-gradient(135deg, #1E4AE9 0%, #1638B8 100%) !important;
+    /* Botão principal */
+    .stButton > button {
+        background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%) !important;
         border: none !important;
         border-radius: 10px !important;
-        color: #fff !important;
-        font-family: 'Syne', sans-serif !important;
-        font-weight: 700 !important;
-        font-size: .95rem !important;
-        letter-spacing: .04em !important;
-        padding: 14px 24px !important;
-        transition: opacity .2s, transform .1s !important;
-        box-shadow: 0 4px 20px rgba(30,74,233,0.35) !important;
+        color: white !important;
+        font-weight: 600 !important;
+        padding: 0.6rem 1.5rem !important;
+        transition: all 0.3s ease !important;
     }
-    [data-testid="stButton"] button:hover {
-        opacity: .9 !important;
-        transform: translateY(-1px) !important;
-    }
-    [data-testid="stButton"] button:active { transform: translateY(0) !important; }
     
-    .stProgress > div > div {
-        background: linear-gradient(90deg, #1E4AE9, #00D4FF) !important;
-        border-radius: 4px !important;
+    .stButton > button:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 10px 20px -10px rgba(59, 130, 246, 0.5) !important;
     }
+    
+    /* Input fields */
+    .stTextInput > div > div > input {
+        background: rgba(255, 255, 255, 0.05) !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        border-radius: 10px !important;
+        color: white !important;
+        padding: 0.6rem 1rem !important;
+    }
+    
+    .stTextInput > div > div > input:focus {
+        border-color: #3B82F6 !important;
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
+    }
+    
+    /* Progress bar */
+    .stProgress > div > div > div {
+        background: linear-gradient(90deg, #3B82F6, #06B6D4) !important;
+    }
+    
+    /* DataFrame */
     [data-testid="stDataFrame"] {
-        border: 1px solid rgba(255,255,255,0.06) !important;
+        background: rgba(255, 255, 255, 0.02) !important;
         border-radius: 12px !important;
-    }
-    [data-testid="metric-container"] {
-        background: rgba(255,255,255,0.02) !important;
-        border: 1px solid rgba(255,255,255,0.06) !important;
-        border-radius: 12px !important;
-        padding: 16px !important;
+        overflow: hidden !important;
     }
     
-    /* ── Animations ─────────────────────────────── */
-    @keyframes fadeUp {
-        from { opacity:0; transform:translateY(24px); }
-        to   { opacity:1; transform:translateY(0); }
-    }
-    
-    /* ── Footer ─────────────────────────────────── */
+    /* Footer */
     .custom-footer {
         text-align: center;
-        padding: 40px 24px;
-        border-top: 1px solid rgba(255,255,255,0.04);
-        color: #2D3748;
-        font-size: .8rem;
+        padding: 2rem;
+        margin-top: 3rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        color: #64748B;
+        font-size: 0.8rem;
     }
-    .custom-footer b { color: #4A5568; }
-    .footer-icons { display:flex; justify-content:center; gap:16px; margin-top:12px; }
+    
+    .social-links {
+        display: flex;
+        justify-content: center;
+        gap: 1rem;
+        margin-top: 0.5rem;
+    }
+    
+    .social-links a {
+        color: #64748B;
+        text-decoration: none;
+        transition: color 0.3s ease;
+    }
+    
+    .social-links a:hover {
+        color: #3B82F6;
+    }
     </style>
     """
     
     @staticmethod
     def render_login_page(error: bool = False):
-        """Renderiza página de login"""
-        st.markdown(StreamlitUIManager.CSS, unsafe_allow_html=True)
+        """Renderiza página de login otimizada"""
+        st.markdown(OptimizedUIManager.CSS, unsafe_allow_html=True)
         
         st.markdown("""
-        <div class="hero">
-            <div class="grid-bg"></div>
-            <div class="badge"><span class="badge-dot"></span>Plataforma de Geração de Leads</div>
-            <div class="hero-title">Extraia leads do<br><span>Google Maps</span><br>em segundos.</div>
-            <p class="hero-sub">
-                Encontre empresas, telefones, sites e avaliações de qualquer segmento,
-                em qualquer cidade — de forma automática e escalável.
-            </p>
-            <div class="stats-row">
-                <div class="stat-item">
-                    <div class="stat-num">100%</div>
-                    <div class="stat-label">dos resultados</div>
-                </div>
-                <div class="stat-div"></div>
-                <div class="stat-item">
-                    <div class="stat-num">6+</div>
-                    <div class="stat-label">campos extraídos</div>
-                </div>
-                <div class="stat-div"></div>
-                <div class="stat-item">
-                    <div class="stat-num">Excel</div>
-                    <div class="stat-label">exportação direta</div>
+        <div class="main-container animate-in">
+            <div class="modern-header">
+                <div class="logo-area">
+                    <div class="logo-icon">📍</div>
+                    <div>
+                        <div class="logo-text">Gerar Lead</div>
+                        <div class="logo-sub">Google Maps Scraper</div>
+                    </div>
                 </div>
             </div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown("""
-        <div class="features">
-            <div class="feat-card">
-                <div class="feat-icon">📍</div>
-                <div class="feat-title">Busca Inteligente</div>
-                <div class="feat-desc">Pesquise qualquer nicho em qualquer cidade do Brasil.</div>
+            
+            <div class="glass-card" style="max-width: 500px; margin: 0 auto;">
+                <div style="text-align: center; margin-bottom: 2rem;">
+                    <div style="font-size: 3rem; margin-bottom: 0.5rem;">🎯</div>
+                    <h2 style="margin-bottom: 0.5rem;">Plataforma de Leads</h2>
+                    <p style="color: #64748B;">Extraia dados do Google Maps em escala</p>
+                </div>
+                
+                <div class="feature-grid">
+                    <div class="feature-item">
+                        <div class="feature-icon">⚡</div>
+                        <div class="feature-title">Rápido</div>
+                        <div class="feature-desc">Extração paralela</div>
+                    </div>
+                    <div class="feature-item">
+                        <div class="feature-icon">📊</div>
+                        <div class="feature-title">Completo</div>
+                        <div class="feature-desc">9 campos extraídos</div>
+                    </div>
+                    <div class="feature-item">
+                        <div class="feature-icon">💾</div>
+                        <div class="feature-title">Persistente</div>
+                        <div class="feature-desc">Base acumulada</div>
+                    </div>
+                </div>
+                
+                <div class="stats-row">
+                    <div class="stat-item">
+                        <div class="stat-number">100%</div>
+                        <div class="stat-label">Automação</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number">6+</div>
+                        <div class="stat-label">Campos</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number">Excel</div>
+                        <div class="stat-label">Exportação</div>
+                    </div>
+                </div>
             </div>
-            <div class="feat-card">
-                <div class="feat-icon">⚡</div>
-                <div class="feat-title">Extração Total</div>
-                <div class="feat-desc">Sem limites. Todos os resultados do Google Maps extraídos.</div>
-            </div>
-            <div class="feat-card">
-                <div class="feat-icon">📊</div>
-                <div class="feat-title">Base Acumulada</div>
-                <div class="feat-desc">Histórico persistente de todas as suas pesquisas anteriores.</div>
-            </div>
-            <div class="feat-card">
-                <div class="feat-icon">📥</div>
-                <div class="feat-title">Export Excel</div>
-                <div class="feat-desc">Download imediato em .xlsx pronto para seu CRM.</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown("""
-            <div class="login-icon">🔐</div>
-            <div class="login-title">Acesso Restrito</div>
-            <div class="login-sub">Entre com suas credenciais para continuar</div>
         """, unsafe_allow_html=True)
         
         if error:
-            st.markdown('<div class="login-error">⚠️ Usuário ou senha incorretos. Tente novamente.</div>', unsafe_allow_html=True)
-    
-    @staticmethod
-    def render_footer():
-        """Renderiza footer"""
-        st.markdown("""
-        <div class="custom-footer">
-            Desenvolvido por <b>Rodrigo AIOSA</b>
-            <div class="footer-icons">
-                <a href="https://wa.me/5511977019335" target="_blank">
-                    <img src="https://cdn-icons-png.flaticon.com/512/733/733585.png" width="22">
-                </a>
-                <a href="https://www.linkedin.com/in/rodrigoaiosa/" target="_blank">
-                    <img src="https://cdn-icons-png.flaticon.com/512/174/174857.png" width="22">
-                </a>
+            st.markdown("""
+            <div class="glass-card" style="max-width: 500px; margin: 1rem auto; background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3);">
+                <div style="text-align: center; color: #EF4444;">⚠️ Usuário ou senha incorretos</div>
             </div>
-        </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("""
+            <div class="glass-card" style="max-width: 500px; margin: 0 auto;">
+                <div style="margin-bottom: 1rem;">
+                    <div style="font-weight: 600; margin-bottom: 0.5rem;">🔐 Acesso Restrito</div>
+                    <div style="color: #64748B;">Entre com suas credenciais</div>
+                </div>
+            </div>
         """, unsafe_allow_html=True)
     
     @staticmethod
     def render_app_header():
         """Renderiza header do app"""
         st.markdown("""
-        <div class="app-header">
-            <div class="app-logo">📍</div>
-            <div>
-                <div class="app-logo-text">Gerar Lead</div>
-                <div class="app-logo-sub">Google Maps Scraper</div>
+        <div class="main-container">
+            <div class="modern-header">
+                <div class="logo-area">
+                    <div class="logo-icon">📍</div>
+                    <div>
+                        <div class="logo-text">Gerar Lead</div>
+                        <div class="logo-sub">Google Maps Scraper</div>
+                    </div>
+                </div>
             </div>
-        </div>
         """, unsafe_allow_html=True)
     
     @staticmethod
     def render_results(df: pd.DataFrame):
-        """Renderiza resultados da extração"""
+        """Renderiza resultados"""
         st.divider()
-        st.markdown("### 📊 Resultados")
+        
+        st.markdown("""
+        <div class="glass-card animate-in">
+            <h3 style="margin-bottom: 1rem;">📊 Resultados da Extração</h3>
+        """, unsafe_allow_html=True)
         
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total extraído", len(df))
-        col2.metric("Com telefone", (df["Telefone"] != "N/A").sum())
-        col3.metric("Com site", (df["Site"] != "N/A").sum())
-        col4.metric("Com endereço", (df["Endereço"] != "N/A").sum())
+        
+        with col1:
+            st.metric("Total Extraído", len(df))
+        with col2:
+            st.metric("Com Telefone", (df["Telefone"] != "N/A").sum())
+        with col3:
+            st.metric("Com Site", (df["Site"] != "N/A").sum())
+        with col4:
+            st.metric("Com Endereço", (df["Endereço"] != "N/A").sum())
         
         st.dataframe(df, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    
+    @staticmethod
+    def render_footer():
+        """Renderiza footer"""
+        st.markdown("""
+        <div class="custom-footer">
+            <div>Desenvolvido por <strong>Rodrigo AIOSA</strong></div>
+            <div class="social-links">
+                <a href="https://wa.me/5511977019335" target="_blank">📱 WhatsApp</a>
+                <a href="https://www.linkedin.com/in/rodrigoaiosa/" target="_blank">💼 LinkedIn</a>
+            </div>
+        </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# MAIN APPLICATION
-# ─────────────────────────────────────────────
-class LeadGeneratorApp:
-    """Classe principal da aplicação"""
+# ============================================================================
+# MAIN APPLICATION OTIMIZADA
+# ============================================================================
+
+class OptimizedLeadGeneratorApp:
+    """Aplicação principal otimizada"""
     
     def __init__(self):
-        self.ui_manager = StreamlitUIManager()
-        self.data_manager = DataManager()
+        self.ui_manager = OptimizedUIManager()
+        self.data_manager = OptimizedDataManager()
         self.config = ExtractionConfig(
-            max_workers=5,
-            scroll_wait_time=1.5,
-            detail_wait_time=0.8,
-            max_no_new_items=5
+            max_workers=8,
+            scroll_wait_time=0.6,
+            detail_wait_time=0.4,
+            max_no_new_items=3,
+            batch_size=25,
+            driver_pool_size=6
         )
-        self.extractor = MapsDataExtractor(self.config)
+        self.extractor = OptimizedDataExtractor(self.config)
         self.processor = None
         
         # Credenciais
@@ -979,10 +1245,10 @@ class LeadGeneratorApp:
         """Executa página de login"""
         self.ui_manager.render_login_page(st.session_state["login_erro"])
         
-        usuario = st.text_input("Usuário", placeholder="Digite seu usuário", key="inp_user")
-        senha = st.text_input("Senha", placeholder="Digite sua senha", type="password", key="inp_pass")
+        usuario = st.text_input("Usuário", placeholder="Digite seu usuário", key="login_user")
+        senha = st.text_input("Senha", placeholder="Digite sua senha", type="password", key="login_pass")
         
-        if st.button("Entrar →", use_container_width=True):
+        if st.button("🔓 Entrar", use_container_width=True):
             if self._check_login(usuario, senha):
                 st.session_state["logado"] = True
                 st.session_state["login_erro"] = False
@@ -994,30 +1260,33 @@ class LeadGeneratorApp:
         self.ui_manager.render_footer()
         st.stop()
     
-    @timer_decorator
+    @PerformanceDecorators.sync_timer
     def run_extraction(self, search_term: str):
-        """Executa extração de dados"""
-        driver = None
+        """Executa extração otimizada"""
         try:
-            # Cria driver para extração inicial
-            factory = ChromeDriverFactory()
-            driver = factory.create_driver()
+            # Cria processador
+            self.processor = OptimizedBatchProcessor(self.extractor, self.config)
             
             # Extrai lista de empresas
             status_placeholder = st.empty()
-            status_placeholder.info(f"🔎 Buscando por: '{search_term}'...")
+            status_placeholder.info(f"🔎 Buscando: '{search_term}'...")
             
-            businesses = self.extractor.extract_businesses(driver, search_term)
+            # Driver temporário para busca inicial
+            factory = ChromeDriverFactory(self.config)
+            temp_driver = factory.create_driver()
+            
+            try:
+                businesses = self.extractor.extract_businesses(temp_driver, search_term)
+            finally:
+                temp_driver.quit()
+            
             total = len(businesses)
             
             if total == 0:
-                st.warning("Nenhuma empresa encontrada para este termo.")
+                st.warning("Nenhuma empresa encontrada.")
                 return
             
-            status_placeholder.info(f"📋 Encontradas {total} empresas. Iniciando extração detalhada...")
-            
-            # Prepara processamento paralelo
-            self.processor = BatchProcessor(self.extractor, self.config)
+            status_placeholder.info(f"📋 {total} empresas encontradas. Extraindo detalhes...")
             
             # Progresso
             progress_bar = st.progress(0)
@@ -1025,7 +1294,7 @@ class LeadGeneratorApp:
             
             def update_progress(current, total):
                 progress_bar.progress(current / total)
-                progress_text.text(f"⚙️ Processando: {current}/{total} empresas")
+                progress_text.text(f"⚙️ {current}/{total} empresas")
             
             # Processa em paralelo
             processed_businesses = self.processor.process_batch(businesses, update_progress)
@@ -1033,60 +1302,72 @@ class LeadGeneratorApp:
             # Salva resultados
             df_new = self.data_manager.save_batch(processed_businesses)
             
-            # Mostra resultados
+            # Estatísticas
             success_count = sum(1 for b in processed_businesses if b.telefone != "N/A")
             error_count = total - success_count
             
             if error_count > 0:
-                with st.expander(f"⚠️ {error_count} empresa(s) com erro"):
-                    for b in processed_businesses:
+                with st.expander(f"⚠️ {error_count} empresas com erro"):
+                    for b in processed_businesses[:10]:  # Mostra apenas 10 exemplos
                         if b.telefone == "N/A":
                             st.write(f"• {b.empresa}")
+                    if error_count > 10:
+                        st.write(f"... e mais {error_count - 10} empresas")
             
-            st.success(f"✅ Concluído! **{success_count}** extraídos | **{error_count}** com erro.")
+            st.success(f"✅ Concluído! {success_count} extraídas | {error_count} com erro")
             
-            # Armazena no session state
+            # Armazena resultado
             st.session_state["df_resultado"] = df_new
             
         except Exception as e:
             logger.error(f"Erro na extração: {e}")
-            st.error(f"Erro crítico: {e}")
+            st.error(f"Erro: {e}")
         finally:
-            if driver:
-                driver.quit()
             if self.processor:
                 self.processor.cleanup()
     
     def run_main_app(self):
-        """Executa aplicação principal pós-login"""
-        st.set_page_config(page_title="Gerar Lead | Google Maps Scraper", layout="wide", page_icon="📍")
-        st.markdown(StreamlitUIManager.CSS, unsafe_allow_html=True)
+        """Executa aplicação principal"""
+        st.set_page_config(
+            page_title="Gerar Lead",
+            layout="wide",
+            page_icon="📍",
+            initial_sidebar_state="collapsed"
+        )
         
         self.ui_manager.render_app_header()
         
-        # Busca
-        st.markdown("### 🔎 Nova Extração")
+        # Interface principal
+        st.markdown("""
+        <div class="glass-card animate-in">
+            <h3 style="margin-bottom: 1rem;">🔎 Nova Extração</h3>
+        """, unsafe_allow_html=True)
+        
         termo_final = st.text_input(
-            "O que você deseja buscar?",
-            placeholder="Ex: Farmácias em Osasco SP",
+            "Termo de busca",
+            placeholder="Ex: Farmácias em Osasco SP, Restaurantes em São Paulo, Advogados em Curitiba",
+            help="Digite o que deseja buscar no Google Maps"
         )
         
         if st.button("🚀 Iniciar Extração", use_container_width=True):
             if not termo_final:
-                st.warning("Por favor, digite um termo de busca.")
+                st.warning("Digite um termo de busca")
             else:
                 self.run_extraction(termo_final)
         
+        st.markdown("</div>", unsafe_allow_html=True)
+        
         # Resultados
-        if "df_resultado" in st.session_state:
+        if "df_resultado" in st.session_state and st.session_state["df_resultado"] is not None:
             self.ui_manager.render_results(st.session_state["df_resultado"])
             
+            # Botão de download
             if os.path.exists("base_dados_total.xlsx"):
                 with open("base_dados_total.xlsx", "rb") as f:
                     st.download_button(
                         label="📥 Baixar Base Completa (Excel)",
                         data=f,
-                        file_name="base_leads_acumulada.xlsx",
+                        file_name=f"leads_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True,
                     )
@@ -1094,17 +1375,23 @@ class LeadGeneratorApp:
         self.ui_manager.render_footer()
     
     def run(self):
-        """Ponto de entrada da aplicação"""
-        st.set_page_config(page_title="Gerar Lead | Google Maps Scraper", layout="wide", page_icon="📍")
+        """Ponto de entrada"""
+        st.set_page_config(
+            page_title="Gerar Lead",
+            layout="wide",
+            page_icon="📍",
+            initial_sidebar_state="collapsed"
+        )
         
-        if not st.session_state["logado"]:
+        if not st.session_state.get("logado", False):
             self.run_login_page()
         else:
             self.run_main_app()
 
-# ─────────────────────────────────────────────
+# ============================================================================
 # EXECUÇÃO
-# ─────────────────────────────────────────────
+# ============================================================================
+
 if __name__ == "__main__":
-    app = LeadGeneratorApp()
+    app = OptimizedLeadGeneratorApp()
     app.run()
