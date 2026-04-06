@@ -2,4 +2,6 @@ streamlit
 pandas
 selenium
 webdriver-manager
+aiohttp
 openpyxl
+numpy
